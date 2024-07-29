@@ -1,166 +1,116 @@
-import threading, time, models, os
-from ansio import application_keypad, mouse_input, raw_input
-from ansio.input import InputEvent, get_input_event
-from agent import Agent, AgentConfig
-from python.helpers.print_style import PrintStyle
-from python.helpers.files import read_file
-from python.helpers import files
-import python.helpers.timed_input as timed_input
+import os
+from dotenv import load_dotenv
+from langchain_community.llms import Ollama
+from langchain_openai import ChatOpenAI, OpenAI, OpenAIEmbeddings
+from langchain_anthropic import ChatAnthropic
+from langchain_groq import ChatGroq
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, HarmBlockThreshold, HarmCategory
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import transformers
 
+# Load environment variables
+load_dotenv()
 
-input_lock = threading.Lock()
-os.chdir(files.get_abs_path("./work_dir")) #change CWD to work_dir
+# Configuration
+DEFAULT_TEMPERATURE = 0.0
 
+# Utility function to get API keys from environment variables
+def get_api_key(service):
+    return os.getenv(f"API_KEY_{service.upper()}")
 
-def initialize():
-    
-    # main chat model used by agents (smarter, more accurate)
-
-    # chat_llm = models.get_groq_llama70b(temperature=0.2)
-    # chat_llm = models.get_groq_llama70b_json(temperature=0.2)
-    # chat_llm = models.get_groq_llama8b(temperature=0.2)
-    # chat_llm = models.get_openai_gpt35(temperature=0)
-    # chat_llm = models.get_openai_gpt4o(temperature=0)
-    chat_llm = models.get_openai_chat(temperature=0)
-    # chat_llm = models.get_anthropic_opus(temperature=0)
-    # chat_llm = models.get_anthropic_sonnet(temperature=0)
-    # chat_llm = models.get_anthropic_sonnet_35(temperature=0)
-    # chat_llm = models.get_anthropic_haiku(temperature=0)
-    # chat_llm = models.get_ollama_dolphin()
-    # chat_llm = models.get_ollama(model_name="gemma2:27b")
-    # chat_llm = models.get_ollama(model_name="llama3:8b-text-fp16")
-    # chat_llm = models.get_ollama(model_name="gemma2:latest")
-    # chat_llm = models.get_ollama(model_name="qwen:14b")
-    # chat_llm = models.get_google_chat()
-
-
-    # utility model used for helper functions (cheaper, faster)
-    utility_llm = models.get_openai_chat(temperature=0)
-    
-    # embedding model used for memory
-    embedding_llm = models.get_embedding_openai()
-    # embedding_llm = models.get_embedding_hf()
-
-    # agent configuration
-    config = AgentConfig(
-        chat_model = chat_llm,
-        utility_model = utility_llm,
-        embeddings_model = embedding_llm,
-        # memory_subdir = "",
-        auto_memory_count = 0,
-        # auto_memory_skip = 2,
-        # rate_limit_seconds = 60,
-        # rate_limit_requests = 30,
-        # rate_limit_input_tokens = 0,
-        # rate_limit_output_tokens = 0,
-        # msgs_keep_max = 25,
-        # msgs_keep_start = 5,
-        # msgs_keep_end = 10,
-        # max_tool_response_length = 3000,
-        # response_timeout_seconds = 60,
-        code_exec_docker_enabled = True,
-        # code_exec_docker_name = "agent-zero-exe",
-        # code_exec_docker_image = "frdel/agent-zero-exe:latest",
-        # code_exec_docker_ports = { "22/tcp": 50022 }
-        # code_exec_docker_volumes = { files.get_abs_path("work_dir"): {"bind": "/root", "mode": "rw"} }
-        code_exec_ssh_enabled = True,
-        # code_exec_ssh_addr = "localhost",
-        # code_exec_ssh_port = 50022,
-        # code_exec_ssh_user = "root",
-        # code_exec_ssh_pass = "toor",
-        # additional = {},
+# Function to load Llama 3.1 model and tokenizer
+def load_llama31_model():
+    huggingface_api_key = get_api_key("huggingface")
+    transformers.utils.logging.set_verbosity_error()
+    tokenizer = AutoTokenizer.from_pretrained(
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        use_auth_token=huggingface_api_key
     )
-    
-    # create the first agent
-    agent0 = Agent( number = 0, config = config )
+    model = AutoModelForCausalLM.from_pretrained(
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        use_auth_token=huggingface_api_key
+    )
+    return tokenizer, model
 
-    # start the chat loop
-    chat(agent0)
+# Factory functions for each model type
+def get_anthropic_haiku(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("anthropic")
+    return ChatAnthropic(model_name="claude-3-haiku-20240307", temperature=temperature, api_key=api_key)  # type: ignore
 
+def get_anthropic_sonnet_35(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("anthropic")
+    return ChatAnthropic(model_name="claude-3-5-sonnet-20240620", temperature=temperature, api_key=api_key)  # type: ignore
 
-# Main conversation loop
-def chat(agent:Agent):
-    
-    # start the conversation loop  
-    while True:
-        # ask user for message
-        with input_lock:
-            timeout = agent.get_data("timeout") # how long the agent is willing to wait
-            if not timeout: # if agent wants to wait for user input forever
-                PrintStyle(background_color="#6C3483", font_color="white", bold=True, padding=True).print(f"User message ('e' to leave):")        
-                import readline # this fixes arrow keys in terminal
-                user_input = input("> ")
-                PrintStyle(font_color="white", padding=False, log_only=True).print(f"> {user_input}") 
-                
-            else: # otherwise wait for user input with a timeout
-                PrintStyle(background_color="#6C3483", font_color="white", bold=True, padding=True).print(f"User message ({timeout}s timeout, 'w' to wait, 'e' to leave):")        
-                import readline # this fixes arrow keys in terminal
-                # user_input = timed_input("> ", timeout=timeout)
-                user_input = timeout_input("> ", timeout=timeout)
-                                    
-                if not user_input:
-                    user_input = read_file("prompts/fw.msg_timeout.md")
-                    PrintStyle(font_color="white", padding=False).stream(f"{user_input}")        
-                else:
-                    user_input = user_input.strip()
-                    if user_input.lower()=="w": # the user needs more time
-                        user_input = input("> ").strip()
-                    PrintStyle(font_color="white", padding=False, log_only=True).print(f"> {user_input}")        
-                    
-                    
+def get_anthropic_sonnet(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("anthropic")
+    return ChatAnthropic(model_name="claude-3-sonnet-20240229", temperature=temperature, api_key=api_key)  # type: ignore
 
-        # exit the conversation when the user types 'exit'
-        if user_input.lower() == 'e': break
+def get_anthropic_opus(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("anthropic")
+    return ChatAnthropic(model_name="claude-3-opus-20240229", temperature=temperature, api_key=api_key)  # type: ignore
 
-        # send message to agent0, 
-        assistant_response = agent.message_loop(user_input)
-        
-        # print agent0 response
-        PrintStyle(font_color="white",background_color="#1D8348", bold=True, padding=True).print(f"{agent.agent_name}: reponse:")        
-        PrintStyle(font_color="white").print(f"{assistant_response}")        
-                        
+def get_openai_gpt35(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("openai")
+    return ChatOpenAI(model_name="gpt-3.5-turbo", temperature=temperature, api_key=api_key)  # type: ignore
 
-# User intervention during agent streaming
-def intervention():
-    if Agent.streaming_agent and not Agent.paused:
-        Agent.paused = True # stop agent streaming
-        PrintStyle(background_color="#6C3483", font_color="white", bold=True, padding=True).print(f"User intervention ('e' to leave, empty to continue):")        
+def get_openai_chat(api_key=None, model="gpt-4o-mini", temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("openai")
+    return ChatOpenAI(model_name=model, temperature=temperature, api_key=api_key)  # type: ignore
 
-        import readline # this fixes arrow keys in terminal
-        user_input = input("> ").strip()
-        PrintStyle(font_color="white", padding=False, log_only=True).print(f"> {user_input}")        
-        
-        if user_input.lower() == 'e': os._exit(0) # exit the conversation when the user types 'exit'
-        if user_input: Agent.streaming_agent.intervention_message = user_input # set intervention message if non-empty
-        Agent.paused = False # continue agent streaming 
-    
+def get_openai_gpt35_instruct(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("openai")
+    return OpenAI(model_name="gpt-3.5-turbo-instruct", temperature=temperature, api_key=api_key)  # type: ignore
 
-# Capture keyboard input to trigger user intervention
-def capture_keys():
-        global input_lock
-        intervent=False            
-        while True:
-            if intervent: intervention()
-            intervent = False
-            time.sleep(0.1)
-            
-            if Agent.streaming_agent:
-                # with raw_input, application_keypad, mouse_input:
-                with input_lock, raw_input, application_keypad:
-                    event: InputEvent | None = get_input_event(timeout=0.1)
-                    if event and (event.shortcut.isalpha() or event.shortcut.isspace()):
-                        intervent=True
-                        continue
+def get_openai_gpt4(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("openai")
+    return ChatOpenAI(model_name="gpt-4-0125-preview", temperature=temperature, api_key=api_key)  # type: ignore
 
-# User input with timeout
-def timeout_input(prompt, timeout=10):
-    return timed_input.timeout_input(prompt=prompt, timeout=timeout)
+def get_openai_gpt4o(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("openai")
+    return ChatOpenAI(model_name="gpt-4o", temperature=temperature, api_key=api_key)  # type: ignore
 
-if __name__ == "__main__":
-    print("Initializing framework...")
+def get_groq_mixtral7b(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("groq")
+    return ChatGroq(model_name="mixtral-8x7b-32768", temperature=temperature, api_key=api_key)  # type: ignore
 
-    # Start the key capture thread for user intervention during agent streaming
-    threading.Thread(target=capture_keys, daemon=True).start()
+def get_groq_llama70b(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("groq")
+    return ChatGroq(model_name="llama3-70b-8192", temperature=temperature, api_key=api_key)  # type: ignore
 
-    # Start the chat
-    initialize()
+def get_groq_llama70b_json(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("groq")
+    return ChatGroq(model_name="llama3-70b-8192", temperature=temperature, api_key=api_key, model_kwargs={"response_format": {"type": "json_object"}})  # type: ignore
+
+def get_groq_llama8b(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("groq")
+    return ChatGroq(model_name="Llama3-8b-8192", temperature=temperature, api_key=api_key)  # type: ignore
+
+def get_ollama(model_name, temperature=DEFAULT_TEMPERATURE):
+    return Ollama(model=model_name, temperature=temperature)
+
+def get_groq_gemma(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("groq")
+    return ChatGroq(model_name="gemma-7b-it", temperature=temperature, api_key=api_key)  # type: ignore
+
+def get_ollama_dolphin(temperature=DEFAULT_TEMPERATURE):
+    return Ollama(model="dolphin-llama3:8b-256k-v2.9-fp16", temperature=temperature)
+
+def get_ollama_phi(temperature=DEFAULT_TEMPERATURE):
+    return Ollama(model="phi3:3.8b-mini-instruct-4k-fp16", temperature=temperature)
+
+def get_google_chat(model_name="gemini-1.5-flash-latest", api_key=None, temperature=DEFAULT_TEMPERATURE):
+    api_key = api_key or get_api_key("google")
+    return ChatGoogleGenerativeAI(model=model_name, temperature=temperature, google_api_key=api_key,
+                                  safety_settings={HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE})  # type: ignore
+
+def get_embedding_hf(model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    return HuggingFaceEmbeddings(model_name=model_name)
+
+def get_embedding_openai(api_key=None):
+    api_key = api_key or get_api_key("openai")
+    return OpenAIEmbeddings(api_key=api_key)  # type: ignore
+
+def get_llama31(api_key=None, temperature=DEFAULT_TEMPERATURE):
+    tokenizer, model = load_llama31_model()
+    return model  # Return the model loaded using transformers

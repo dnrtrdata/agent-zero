@@ -96,7 +96,7 @@ def get_google_chat(model_name="gemini-1.5-flash-latest", api_key=None, temperat
                                   safety_settings={HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE})  # type: ignore
 
 def get_embedding_hf(model_name="sentence-transformers/all-MiniLM-L6-v2"):
-    return HuggingFaceEmbeddings(model_name=model_name)
+    return HuggingFaceEmbeddings(llama31=llama31)
 
 def get_embedding_openai(api_key=None):
     api_key = api_key or get_api_key("openai")
